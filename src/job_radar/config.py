@@ -80,6 +80,9 @@ class AppSettings(BaseModel):
 
 class Profile(BaseModel):
     summary: str
+    current_title: str | None = None
+    years_experience: float | None = Field(default=None, ge=0, le=60)
+    domains: list[str] = Field(default_factory=list)
     languages: dict[str, str] = Field(default_factory=dict)
     residency_countries: list[str] = Field(default_factory=list)
     stack: list[str] = Field(default_factory=list)
@@ -243,6 +246,8 @@ class HardExclusions(BaseModel):
     lang_above_profile: bool = True
     residency: bool = True
     seniority_junior: bool = True
+    seniority_above_profile: bool = False
+    no_cv_stack_match: bool = False
     security_clearance: bool = True
     security_clearance_pattern: str | None = None
     security_clearance_negation: str | None = None

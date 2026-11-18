@@ -1,6 +1,6 @@
 # v2: español como idioma propio (`es`), antes caía en `other` y excluía avisos que lo piden.
-prompt_version: v2
-rubric_path: prompts/rubric_v2.md
+prompt_version: v3
+rubric_path: prompts/rubric_v3.md
 
 # Evaluador por defecto. `gemini` mantiene el comportamiento original; `agentrouter_codex`
 # usa Codex CLI (cliente aprobado por AgentRouter) con salida estructurada; `agentrouter`

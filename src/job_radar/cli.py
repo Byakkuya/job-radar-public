@@ -230,6 +230,49 @@ def usage(days: int = typer.Option(7, help="Días hacia atrás")):
     typer.echo("Costo real: revisá el panel del proveedor configurado.")
 
 
+@app.command()
+def web(
+    host: str = typer.Option("127.0.0.1", help="Host local donde escuchar"),
+    port: int = typer.Option(8000, min=1, max=65535, help="Puerto local"),
+    reload: bool = typer.Option(False, help="Recarga automática del backend (desarrollo)"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Abrir el navegador"),
+    verbose: bool = False,
+):
+    """Abre el dashboard web local de job-radar."""
+    import ipaddress
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    cfg = load_config()
+    setup_logging(cfg, verbose)
+    if not (cfg.root / "frontend" / "dist" / "index.html").is_file():
+        typer.secho("React dashboard not built yet.", fg=typer.colors.YELLOW)
+        typer.echo("Run: npm --prefix frontend ci && npm --prefix frontend run build")
+        raise typer.Exit(code=1)
+    try:
+        is_loopback = ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        is_loopback = host == "localhost"
+    if not is_loopback:
+        typer.secho(
+            "Warning: the web UI has no authentication. Prefer --host 127.0.0.1.",
+            fg=typer.colors.YELLOW,
+        )
+    url = f"http://{host if host not in {'0.0.0.0', '::'} else '127.0.0.1'}:{port}"
+    typer.echo(f"job-radar web: {url}")
+    if open_browser and not reload:
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    uvicorn.run(
+        "job_radar.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+        log_level="info" if verbose else "warning",
+    )
+
+
 @app.command("mcp-config")
 def mcp_config():
     """Imprime el bloque para claude_desktop_config.json (servidor MCP de job-radar)."""

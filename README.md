@@ -34,9 +34,11 @@ sources ──> prefilter ──> dedup ──> SQLite ──> LLM (features) �
 
 ## Setup
 
-Requirements: macOS and [uv](https://docs.astral.sh/uv/). If this is your first time and your
-search is different from mine, follow [docs/ADAPTING.md](docs/ADAPTING.md). It lists which
-files to change for your profile, countries and companies.
+Requirements: Python 3.12, [uv](https://docs.astral.sh/uv/) and Node.js 20.19+ (for the React
+dashboard). The CLI works on macOS and Linux; the included automatic scheduler uses macOS
+launchd. If this is your first time and your search is different from mine, follow
+[docs/ADAPTING.md](docs/ADAPTING.md). It lists which files to change for your profile, countries
+and companies.
 
 Clone it outside `~/Documents` (macOS doesn't let launchd read there), for example into
 `~/code`:
@@ -47,6 +49,8 @@ git clone https://github.com/FranciscoRossi48/job-radar-public.git ~/code/job-ra
 
 ```bash
 cd ~/code/job-radar && uv sync
+npm --prefix frontend ci
+npm --prefix frontend run build
 ```
 
 ```bash
@@ -98,7 +102,66 @@ uv run pytest
 | `uv run job-radar decide <id> applied\|discarded\|clear --note "..."` | Records a decision by hand (Claude can also do it with `set_decisions`). |
 | `uv run job-radar applications` | The jobs you applied to. |
 | `uv run job-radar usage` | LLM requests and tokens per day, provider and model. |
+| `uv run job-radar web` | Opens the local React dashboard at http://127.0.0.1:8000. |
 | `uv run job-radar mcp-config` | Configuration block for Claude Desktop. |
+
+## Local web dashboard
+
+![Job Radar local dashboard](docs/assets/web-dashboard.png)
+
+```bash
+uv run job-radar web
+```
+
+The dashboard is a local control center for the same database and pipeline as the CLI:
+
+- overview, discovery trends, country coverage and pipeline funnel;
+- searchable/filterable job database, full job details and score breakdowns;
+- shortlist, data internships, applied/discarded decisions and private notes;
+- full run, ingest, evaluation, export, reprefilter, rescore, dedup and backup controls;
+- live task logs (one operation at a time), daily-run history and LLM usage;
+- CSV generation/downloads;
+- profile/search/scoring summaries and a validated YAML editor with automatic backups.
+- CV import for PDF/DOCX/TXT/Markdown: local text extraction and contact redaction, explicit
+  provider consent, a fully editable profile draft, one-click profile override and full re-ranking.
+
+The production bundle is served by FastAPI, so normal use needs one local process and no Node.js
+dev server. FastAPI exposes the typed `/api/*` control plane, React Query keeps the UI current,
+and long-running operations share a single serialized runner to protect SQLite and provider
+quotas.
+
+It binds to `127.0.0.1` by default and has no authentication. **Do not expose it on a public
+interface.** The UI never returns `.env` values; it only reports whether the selected provider's
+key is configured. API documentation is available locally at <http://127.0.0.1:8000/api/docs>.
+
+### CV-first ranking
+
+Open **Settings → Build your profile from your CV**. The importer never writes the original CV
+to disk: it extracts text in memory, removes probable name/email/phone/links, and shows a preview
+first. Only after checking the consent box is the redacted text sent to the configured LLM.
+Review the generated summary, experience, domains, language levels, residency and skills before
+clicking **Override profile & re-rank**.
+
+Approval updates `config/profile.yaml` (with a backup in `config/.backups/`) and immediately
+rescales every existing evaluation. The CV rules in `config/scoring.yaml` set score 0 and
+exclude roles with no matching CV skill or a seniority clearly above the CV's stated experience
+(with one year of tolerance). The **CV ranking** page lists all evaluated roles from best to
+least, including excluded roles at the bottom. Pending roles can
+be processed with **Evaluate & rank all pending**; this can make many paid LLM calls, so the UI
+requires a separate confirmation.
+
+`config/profile.yaml` is tracked by Git in this example project. The importer is instructed to
+omit names and contact details, but review the draft before saving and do not commit personal
+information to a public repository.
+
+For frontend development, run the API and Vite in separate terminals:
+
+```bash
+uv run job-radar web --no-open --reload
+npm --prefix frontend run dev       # open http://127.0.0.1:5173
+```
+
+Run frontend checks with `npm --prefix frontend test`, `typecheck`, and `build`.
 
 ## Daily use
 
@@ -191,8 +254,9 @@ Track requests and tokens from any provider with `uv run job-radar usage`, and c
 in that provider's console. If billing or authentication fails, evaluation stops and the ads
 remain pending.
 
-The LLM only receives the condensed description and a short summary of your profile, never your
-CV.
+Normal job evaluation sends only the condensed description and short profile summary. The CV
+importer sends redacted CV text only after the user previews it and explicitly consents; the
+original file is never stored by job-radar.
 
 ## Daily run with launchd
 

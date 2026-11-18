@@ -17,8 +17,9 @@ import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from job_radar import db
 from job_radar.config import AgentRouterSettings, Config
@@ -36,6 +37,7 @@ from job_radar.scoring import JobContext, score
 
 log = logging.getLogger(__name__)
 PROVIDER = "agentrouter"
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 def strict_schema(node):
@@ -141,10 +143,6 @@ class CodexEvaluator:
         auth.chmod(0o600)
 
         self._schema = root / "schema.json"
-        self._schema.write_text(
-            json.dumps(strict_schema(EvaluationFeatures.model_json_schema()), ensure_ascii=False),
-            encoding="utf-8",
-        )
         self._out = root / "out.json"
         self._env = os.environ.copy()
         self._env["CODEX_HOME"] = str(home)
@@ -183,9 +181,15 @@ class CodexEvaluator:
             prompt,
         ]
 
-    def _execute(self, prompt: str) -> tuple[dict, dict | None]:
+    def _execute(
+        self, prompt: str, schema_model: type[BaseModel] = EvaluationFeatures
+    ) -> tuple[dict, dict | None]:
         self._prepare()
-        assert self._env and self._workdir and self._out
+        assert self._env and self._workdir and self._out and self._schema
+        self._schema.write_text(
+            json.dumps(strict_schema(schema_model.model_json_schema()), ensure_ascii=False),
+            encoding="utf-8",
+        )
         try:
             proc = self.runner(
                 self._command(prompt),
@@ -220,11 +224,13 @@ class CodexEvaluator:
             "Do not use tools, do not read files and do not add markdown fences."
         )
 
-    def _call(self, prompt: str) -> tuple[dict, str]:
+    def _call(
+        self, prompt: str, schema_model: type[BaseModel] = EvaluationFeatures
+    ) -> tuple[dict, str]:
         attempt = 0
         while True:
             try:
-                data, usage = self._execute(prompt)
+                data, usage = self._execute(prompt, schema_model)
             except RetryableError as error:
                 db.log_llm_call(self.conn, PROVIDER, self.model, False)
                 if attempt >= self.a.codex_max_retries:
@@ -257,8 +263,18 @@ class CodexEvaluator:
             )
             return data, self.model
 
+    def structured(
+        self,
+        prompt: str,
+        schema_model: type[StructuredModel],
+        instruction: str | None = None,
+    ) -> tuple[StructuredModel, str]:
+        full_prompt = f"{instruction}\n\n{prompt}" if instruction else prompt
+        data, model = self._call(full_prompt, schema_model)
+        return schema_model.model_validate(data), model
+
     def evaluate_job(self, job: sqlite3.Row | dict) -> tuple[EvaluationFeatures, str]:
-        data, model = self._call(self._prompt(job))
+        data, model = self._call(self._prompt(job), EvaluationFeatures)
         return EvaluationFeatures.model_validate(sanitize(data)), model
 
     def run(self, limit: int | None = None) -> dict:

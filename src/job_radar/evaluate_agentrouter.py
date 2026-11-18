@@ -9,9 +9,10 @@ import sqlite3
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
+from typing import TypeVar
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from job_radar import db
 from job_radar.config import AgentRouterModel, AgentRouterSettings, Config
@@ -31,6 +32,7 @@ from job_radar.scoring import JobContext, score
 
 log = logging.getLogger(__name__)
 PROVIDER = "agentrouter"
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 def _error_message(response: httpx.Response) -> str:
@@ -126,19 +128,25 @@ class AgentRouterEvaluator:
             )
         return self._client
 
-    def _payload(self, model: str, prompt: str) -> dict:
+    def _payload(
+        self,
+        model: str,
+        prompt: str,
+        schema_model: type[BaseModel] = EvaluationFeatures,
+        instruction: str | None = None,
+    ) -> dict:
         schema = json.dumps(
-            EvaluationFeatures.model_json_schema(), ensure_ascii=False, separators=(",", ":")
+            schema_model.model_json_schema(), ensure_ascii=False, separators=(",", ":")
         )
-        instruction = (
-            f"{self.rubric}\n\n"
+        system_instruction = (
+            f"{instruction or self.rubric}\n\n"
             "Return only one JSON object matching this JSON Schema. Do not use markdown fences.\n"
             f"{schema}"
         )
         return {
             "model": model,
             "messages": [
-                {"role": "system", "content": instruction},
+                {"role": "system", "content": system_instruction},
                 {"role": "user", "content": prompt},
             ],
             "response_format": {"type": "json_object"},
@@ -200,13 +208,21 @@ class AgentRouterEvaluator:
         )
         self.sleep(delay)
 
-    def _call(self, prompt: str) -> tuple[str, str]:
+    def _call(
+        self,
+        prompt: str,
+        schema_model: type[BaseModel] = EvaluationFeatures,
+        instruction: str | None = None,
+    ) -> tuple[str, str]:
         rate_attempt = 0
         while True:
             model = self._next_model()
             self.limiters[model.name].acquire()
             try:
-                response = self.client.post(self.endpoint, json=self._payload(model.name, prompt))
+                response = self.client.post(
+                    self.endpoint,
+                    json=self._payload(model.name, prompt, schema_model, instruction),
+                )
             except httpx.RequestError as error:
                 db.log_llm_call(self.conn, PROVIDER, model.name, False)
                 self._retry_unavailable(model, str(error)[:200])
@@ -255,8 +271,17 @@ class AgentRouterEvaluator:
             self._errors_5xx[model.name] = 0
             return _response_text(data), model.name
 
+    def structured(
+        self,
+        prompt: str,
+        schema_model: type[StructuredModel],
+        instruction: str | None = None,
+    ) -> tuple[StructuredModel, str]:
+        text, model = self._call(prompt, schema_model, instruction)
+        return schema_model.model_validate(_parse_json(text)), model
+
     def evaluate_job(self, job: sqlite3.Row | dict) -> tuple[EvaluationFeatures, str]:
-        text, model = self._call(build_prompt(job, self.cfg.profile))
+        text, model = self._call(build_prompt(job, self.cfg.profile), EvaluationFeatures)
         return EvaluationFeatures.model_validate(sanitize(_parse_json(text))), model
 
     def run(self, limit: int | None = None) -> dict:

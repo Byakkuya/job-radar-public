@@ -64,8 +64,14 @@ class RateLimiter:
 
 def profile_brief(profile: Profile) -> str:
     languages = ", ".join(f"{language} {level}" for language, level in profile.languages.items())
+    experience = (
+        f"Current role: {profile.current_title or 'not specified'}. "
+        f"Years of experience: {profile.years_experience if profile.years_experience is not None else 'not specified'}. "
+        f"Domains: {', '.join(profile.domains) or 'not specified'}.\n"
+    )
     return (
-        f"{profile.summary.strip()}\nLanguages (CEFR): {languages}. No other languages.\n"
+        f"{profile.summary.strip()}\n{experience}"
+        f"Languages (CEFR): {languages}. No other languages.\n"
         f"Stack list: {', '.join(profile.stack)}"
     )
 

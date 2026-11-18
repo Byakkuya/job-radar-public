@@ -13,9 +13,10 @@ import sqlite3
 import time
 from collections.abc import Callable
 from datetime import datetime
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from job_radar import db
 from job_radar.config import Config, GeminiModel, GeminiSettings
@@ -26,6 +27,7 @@ from job_radar.scoring import JobContext, score
 
 log = logging.getLogger(__name__)
 PROVIDER = "gemini"
+StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 _PACIFIC = ZoneInfo("America/Los_Angeles")
 
 
@@ -92,13 +94,18 @@ class GeminiEvaluator:
             )
         return self._client
 
-    def _config(self, m: GeminiModel):
+    def _config(
+        self,
+        m: GeminiModel,
+        schema_model: type[BaseModel] = EvaluationFeatures,
+        instruction: str | None = None,
+    ):
         from google.genai import types
 
         kw = dict(
-            system_instruction=self.rubric,
+            system_instruction=instruction or self.rubric,
             response_mime_type="application/json",
-            response_json_schema=EvaluationFeatures.model_json_schema(),
+            response_json_schema=schema_model.model_json_schema(),
             temperature=self.g.temperature,
         )
         if m.thinking_level:
@@ -137,7 +144,12 @@ class GeminiEvaluator:
             for m in self.g.models
         )
 
-    def _call(self, prompt: str) -> tuple[str, str]:
+    def _call(
+        self,
+        prompt: str,
+        schema_model: type[BaseModel] = EvaluationFeatures,
+        instruction: str | None = None,
+    ) -> tuple[str, str]:
         """(texto de la respuesta, modelo usado)."""
         from google.genai import errors
 
@@ -147,7 +159,9 @@ class GeminiEvaluator:
             self.limiters[m.name].acquire()
             try:
                 resp = self.client.models.generate_content(
-                    model=m.name, contents=prompt, config=self._config(m)
+                    model=m.name,
+                    contents=prompt,
+                    config=self._config(m, schema_model, instruction),
                 )
                 u = getattr(resp, "usage_metadata", None)
                 out_tokens = None
@@ -220,8 +234,17 @@ class GeminiEvaluator:
                 attempt += 1
                 self.sleep(delay)
 
+    def structured(
+        self,
+        prompt: str,
+        schema_model: type[StructuredModel],
+        instruction: str | None = None,
+    ) -> tuple[StructuredModel, str]:
+        text, model = self._call(prompt, schema_model, instruction)
+        return schema_model.model_validate(json.loads(text)), model
+
     def evaluate_job(self, job: sqlite3.Row | dict) -> tuple[EvaluationFeatures, str]:
-        text, model = self._call(build_prompt(job, self.cfg.profile))
+        text, model = self._call(build_prompt(job, self.cfg.profile), EvaluationFeatures)
         return EvaluationFeatures.model_validate(sanitize(json.loads(text))), model
 
     def run(self, limit: int | None = None) -> dict:
